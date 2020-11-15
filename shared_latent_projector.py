@@ -277,9 +277,9 @@ if __name__ == "__main__":
                 latent_shared_layers_diff.append(0)
             if (args.reset_till is not None):
                 if (args.invert_reset_till):
-                    latent_shared_layers_diff.append(torch.sum(torch.pow(prev_latent[:,args.reset_from:args.reset_till,:]-latent_in[:,args.reset_from:args.reset_till,:], 2)).item() / (16 - args.reset_till + args.reset_from))
+                    latent_shared_layers_diff.append(torch.sum(torch.pow(prev_latent[:,args.reset_from:args.reset_till,:]-latent_in[:,args.reset_from:args.reset_till,:], 2)).item() / (args.reset_till - args.reset_from + 1))
                     latent_reset_layers_diff.append(((torch.sum(torch.pow(prev_latent[:,args.reset_till:,:]-latent_in[:,args.reset_till:,:], 2)) +
-                                                      torch.sum(torch.pow(prev_latent[:,:args.reset_from,:]-latent_in[:,:args.reset_from,:], 2))).item()) / (args.reset_till - args.reset_from + 1))
+                                                      torch.sum(torch.pow(prev_latent[:,:args.reset_from,:]-latent_in[:,:args.reset_from,:], 2))).item()) / (16 - args.reset_till + args.reset_from))
                 else:
                     latent_reset_layers_diff.append(torch.sum(torch.pow(prev_latent[:,args.reset_from:args.reset_till,:]-latent_in[:,args.reset_from:args.reset_till,:], 2)).item() / (args.reset_till - args.reset_from + 1))
                     latent_shared_layers_diff.append(((torch.sum(torch.pow(prev_latent[:,args.reset_till:,:]-latent_in[:,args.reset_till:,:], 2)) +
