@@ -116,6 +116,9 @@ if __name__ == "__main__":
         "--full", action="store_true", help="reset all layers of the latent between projections"
     )
     parser.add_argument(
+        "--preserve_noise_map", action="store_true", help="do not optimize the noise map"
+    )
+    parser.add_argument(
         "--lr_rampup",
         type=float,
         default=0.05,
@@ -202,8 +205,10 @@ if __name__ == "__main__":
     original_initialized_latent = latent_in.detach().clone()
 
     for noise in noises:
-        noise.requires_grad = True # optimize for noise
+        noise.requires_grad = not args.preserve_noise_map # optimize for noise
 
+    original_initialized_noises = [noise.detach().clone() for noise in noises]
+    
     # set up perceptual loss net
     percept = lpips.PerceptualLoss(
             model="net-lin", net="vgg", use_gpu=device.startswith("cuda")
@@ -217,8 +222,11 @@ if __name__ == "__main__":
     
     for imgfile in args.files:
         prev_latent = latent_in.detach().clone()
+        
         latent_in.requires_grad = True # turn back backpropogation
-
+        for noise in noises:
+            noise.requires_grad = True # turn it back on for noise too
+            
         imgs = []
 
         img = transform(Image.open(imgfile).convert("RGB"))
@@ -270,20 +278,20 @@ if __name__ == "__main__":
                     f" mse: {mse_loss.item():.4f}; lr: {lr:.4f}"
                 )
             )
-        
-        if args.full or (args.reset_till is not None):
-            if args.full:
-                latent_reset_layers_diff.append(torch.sum(torch.pow(prev_latent-latent_in, 2)).item())
+        if args.reset_from == 0 and args.reset_till == 15:
+            if args.invert_reset_till:
+                latent_shared_layers_diff.append(torch.sum(torch.pow(prev_latent-latent_in, 2) / 16).item())
+                latent_reset_layers_diff.append(0)
+            else:
+                latent_reset_layers_diff.append(torch.sum(torch.pow(prev_latent-latent_in, 2) / 16).item())
                 latent_shared_layers_diff.append(0)
-            if (args.reset_till is not None):
-                if (args.invert_reset_till):
-                    latent_shared_layers_diff.append(torch.sum(torch.pow(prev_latent[:,args.reset_from:args.reset_till,:]-latent_in[:,args.reset_from:args.reset_till,:], 2)).item() / (args.reset_till - args.reset_from + 1))
-                    latent_reset_layers_diff.append(((torch.sum(torch.pow(prev_latent[:,args.reset_till:,:]-latent_in[:,args.reset_till:,:], 2)) +
-                                                      torch.sum(torch.pow(prev_latent[:,:args.reset_from,:]-latent_in[:,:args.reset_from,:], 2))).item()) / (16 - args.reset_till + args.reset_from))
-                else:
-                    latent_reset_layers_diff.append(torch.sum(torch.pow(prev_latent[:,args.reset_from:args.reset_till,:]-latent_in[:,args.reset_from:args.reset_till,:], 2)).item() / (args.reset_till - args.reset_from + 1))
-                    latent_shared_layers_diff.append(((torch.sum(torch.pow(prev_latent[:,args.reset_till:,:]-latent_in[:,args.reset_till:,:], 2)) +
-                                                       torch.sum(torch.pow(prev_latent[:,:args.reset_from,:]-latent_in[:,:args.reset_from,:], 2))).item()) / (16 - args.reset_till + args.reset_from))
+        else:
+            if (args.invert_reset_till):
+                latent_shared_layers_diff.append(torch.sum(torch.pow(prev_latent[:,args.reset_from:args.reset_till,:]-latent_in[:,args.reset_from:args.reset_till,:], 2)).item() / (args.reset_till - args.reset_from + 1))
+                latent_reset_layers_diff.append(((torch.sum(torch.pow(prev_latent[:,args.reset_till:,:]-latent_in[:,args.reset_till:,:], 2)) + torch.sum(torch.pow(prev_latent[:,:args.reset_from,:]-latent_in[:,:args.reset_from,:], 2))).item()) / (16 - args.reset_till + args.reset_from))
+            else:
+                latent_reset_layers_diff.append(torch.sum(torch.pow(prev_latent[:,args.reset_from:args.reset_till,:]-latent_in[:,args.reset_from:args.reset_till,:], 2)).item() / (args.reset_till - args.reset_from + 1))
+                latent_shared_layers_diff.append(((torch.sum(torch.pow(prev_latent[:,args.reset_till:,:]-latent_in[:,args.reset_till:,:], 2)) + torch.sum(torch.pow(prev_latent[:,:args.reset_from,:]-latent_in[:,:args.reset_from,:], 2))).item()) / (16 - args.reset_till + args.reset_from))
         
         lpip_diff.append(p_loss.item())
 
@@ -330,32 +338,38 @@ if __name__ == "__main__":
         file_num += 1
         
         # reset back to original latent
-        if args.full or (args.reset_till is not None):
+        if (args.reset_till is not None):
 
             new_latent_in = original_initialized_latent
-
             latent_in.requires_grad = False
             
             # copy its values over
-            if args.full:
-                latent_in.copy_(new_latent_in)
-            if (args.reset_till is not None):
-                if (args.invert_reset_till):
-                    if (args.reset_till != 15):
-                      latent_in.index_copy_(1, torch.tensor(list(range(args.reset_till,16)), device=device), new_latent_in[:,args.reset_till:,:])
+            if (args.invert_reset_till):
+                if (args.reset_till != 15):
+                  latent_in.index_copy_(1, torch.tensor(list(range(args.reset_till,16)), device=device), new_latent_in[:,args.reset_till:,:])
 
-                    if (args.reset_from != 0):
-                      latent_in.index_copy_(1, torch.tensor(list(range(0,args.reset_from)), device=device), new_latent_in[:,:args.reset_from,:])
+                if (args.reset_from != 0):
+                  latent_in.index_copy_(1, torch.tensor(list(range(0,args.reset_from)), device=device), new_latent_in[:,:args.reset_from,:])
 
-                else:  
-                    latent_in.index_copy_(1, torch.tensor(list(range(args.reset_from, args.reset_till)), device=device), new_latent_in[:,args.reset_from:args.reset_till,:])
-                
+            else:  
+                latent_in.index_copy_(1, torch.tensor(list(range(args.reset_from, args.reset_till)), device=device), new_latent_in[:,args.reset_from:args.reset_till,:])
+        
+        # reset corresponding noise maps
+        if (args.reset_till is not None):
+            for noise in noises:
+                noise.requires_grad = False
+            
+            for i in range(args.reset_from, args.reset_till):
+                noises[i] = original_initialized_noises[i].detach().clone()
+        
+    
+    print(latent_reset_layers_diff)
+    print(latent_shared_layers_diff)
     plt.figure(figsize=(28,4))
-    plt.plot(latent_reset_layers_diff, color="orange")
-    plt.plot(latent_shared_layers_diff, color="red")
-
+    plt.plot(latent_reset_layers_diff, color="orange", label="reset layers diff (avg layer squared distance)")
+    plt.plot(latent_shared_layers_diff, color="red", label="shared layers diff (avg layer squared distance)")
     
     plt.twinx()
-    plt.plot(lpip_diff, color="blue")
+    plt.plot(lpip_diff, color="blue", label="lpip distance")
     plt.savefig(args.out_dir + latent_description + "lpip-diff-graph.png")
 
