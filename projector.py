@@ -119,6 +119,13 @@ if __name__ == "__main__":
         "--preserve_noise_map", action="store_true", help="do not optimize the noise map"
     )
     parser.add_argument(
+        "--full_reset_noise_map", action="store_true", help="always completely reset the noise map"
+    )
+    parser.add_argument(
+        "--heavy_start", action="store_true", help="begin the projection by projecting the first frame by 10000 iterations"
+    )
+
+    parser.add_argument(
         "--lr_rampup",
         type=float,
         default=0.05,
@@ -235,7 +242,7 @@ if __name__ == "__main__":
         imgs = torch.stack(imgs, 0).to(device)
         optimizer = optim.Adam([latent_in] + noises, lr=args.lr)
 
-        pbar = tqdm(range(args.step))
+        pbar = tqdm(range(100000 if file_num == 0 and args.heavy_start else args.step))
         latent_path = []
 
         for i in pbar:
@@ -358,9 +365,13 @@ if __name__ == "__main__":
         if (args.reset_till is not None):
             for noise in noises:
                 noise.requires_grad = False
-            
-            for i in range(args.reset_from, args.reset_till):
-                noises[i] = original_initialized_noises[i].detach().clone()
+
+            if (args.full_reset_noise_map):
+                for i in range(len(noises)):
+                  noises[i] = original_initialized_noises[i].detach().clone()
+            else:
+                for i in range(args.reset_from, args.reset_till):
+                  noises[i] = original_initialized_noises[i].detach().clone()
         
     
     print(latent_reset_layers_diff)
