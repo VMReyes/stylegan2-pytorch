@@ -116,7 +116,7 @@ if __name__ == "__main__":
         "--full", action="store_true", help="reset all layers of the latent between projections"
     )
     parser.add_argument(
-        "--preserve_noise_map", action="store_true", help="do not optimize the noise map"
+        "--optimize_noise_map", action="store_true", help="optimize the noise map"
     )
     parser.add_argument(
         "--full_reset_noise_map", action="store_true", help="always completely reset the noise map"
@@ -212,7 +212,7 @@ if __name__ == "__main__":
     original_initialized_latent = latent_in.detach().clone()
 
     for noise in noises:
-        noise.requires_grad = not args.preserve_noise_map # optimize for noise
+        noise.requires_grad = args.reset_noise_map # optimize for noise
 
     original_initialized_noises = [noise.detach().clone() for noise in noises]
     
@@ -232,7 +232,7 @@ if __name__ == "__main__":
         
         latent_in.requires_grad = True # turn back backpropogation
         for noise in noises:
-            noise.requires_grad = True # turn it back on for noise too
+            noise.requires_grad = args.reset_noise_map # turn it back on for noise too
             
         imgs = []
 
