@@ -95,9 +95,6 @@ if __name__ == "__main__":
         "--size", type=int, default=256, help="output image sizes of the generator"
     )
     parser.add_argument(
-        "--iterations", type=int, default=1000, help="number of iterations per projection"
-    )
-    parser.add_argument(
         "--channel_multiplier", type=int, default=2, help="model checkpoint channel multiplier"
     )
     parser.add_argument(
@@ -212,7 +209,7 @@ if __name__ == "__main__":
     original_initialized_latent = latent_in.detach().clone()
 
     for noise in noises:
-        noise.requires_grad = args.reset_noise_map # optimize for noise
+        noise.requires_grad = args.optimize_noise_map # optimize for noise
 
     original_initialized_noises = [noise.detach().clone() for noise in noises]
     
@@ -232,7 +229,7 @@ if __name__ == "__main__":
         
         latent_in.requires_grad = True # turn back backpropogation
         for noise in noises:
-            noise.requires_grad = args.reset_noise_map # turn it back on for noise too
+            noise.requires_grad = args.optimize_noise_map # turn it back on for noise too
             
         imgs = []
 
@@ -382,5 +379,6 @@ if __name__ == "__main__":
     
     plt.twinx()
     plt.plot(lpip_diff, color="blue", label="lpip distance")
-    plt.savefig(args.out_dir + latent_description + "lpip-diff-graph.png")
+    plt.legend(loc="best")
+    plt.savefig(args.out_dir + "lpip-diff-graph" + latent_description + ".png")
 
