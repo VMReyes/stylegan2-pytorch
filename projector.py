@@ -10,6 +10,7 @@ from PIL import Image
 from tqdm import tqdm
 
 import lpips
+import pickle
 from model import Generator
 
 import matplotlib.pyplot as plt
@@ -371,8 +372,10 @@ if __name__ == "__main__":
                   noises[i] = original_initialized_noises[i].detach().clone()
         
     
-    print(latent_reset_layers_diff)
-    print(latent_shared_layers_diff)
+    #print(latent_reset_layers_diff)
+    #print(latent_shared_layers_diff)
+    with open(args.out_dir + "lpip-diff" + latent_description + ".data", 'wb') as filehandle:
+        pickle.dump({"reset_layers_diff":latent_reset_layers_diff, "shared_layers_diff":latent_shared_layers_diff, "lpip_diff":lpip_diff}, filehandle)
     plt.figure(figsize=(28,4))
     plt.plot(latent_reset_layers_diff, color="orange", label="reset layers diff (avg layer squared distance)")
     plt.plot(latent_shared_layers_diff, color="red", label="shared layers diff (avg layer squared distance)")
