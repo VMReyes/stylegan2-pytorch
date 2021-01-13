@@ -3,6 +3,7 @@ import math
 import os
 
 import torch
+torch.manual_seed(0)
 from torch import optim
 from torch.nn import functional as F
 from torchvision import transforms
@@ -111,9 +112,6 @@ if __name__ == "__main__":
         "--out_dir", type=str, required=True, help="Output directory"
     )
     parser.add_argument(
-        "--full", action="store_true", help="reset all layers of the latent between projections"
-    )
-    parser.add_argument(
         "--optimize_noise_map", action="store_true", help="optimize the noise map"
     )
     parser.add_argument(
@@ -153,6 +151,7 @@ if __name__ == "__main__":
         help="weight of the noise regularization",
     )
     parser.add_argument("--mse", type=float, default=0, help="weight of the mse loss")
+    parser.add_argument("--diff_weight", type=float, default=0.1, help="weight of the loss pertaining to the magnitude of the delta of the reset layers in latents")
     parser.add_argument(
         "--w_plus",
         action="store_true",
@@ -224,9 +223,11 @@ if __name__ == "__main__":
 
     latent_shared_layers_diff = [] # tracks the l2 diff from latent[i] and latent[i-1] for layers we preserve as we project frames
     lpip_diff = [] # tracks the lpip diff current image generated from latent and current original frame
-    
+    prev_latent = latent_in.detach().clone()
+
     for imgfile in args.files:
-        prev_latent = latent_in.detach().clone()
+        print("latent_in:", latent_in)
+        print("prev_latent:", prev_latent)
         
         latent_in.requires_grad = True # turn back backpropogation
         for noise in noises:
@@ -263,11 +264,9 @@ if __name__ == "__main__":
                 img_gen = img_gen.mean([3, 5])
 
             p_loss = percept(img_gen, imgs).sum()
-            n_loss = noise_regularize(noises)
-            mse_loss = F.mse_loss(img_gen, imgs)
+            diff_loss = args.diff_weight * (latent_in - prev_latent).norm(dim=2).mean()
 
-            loss = p_loss + args.noise_regularize * n_loss + args.mse * mse_loss
-
+            loss = p_loss if file_num in [0,1] else p_loss + diff_loss
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -278,11 +277,12 @@ if __name__ == "__main__":
                 latent_path.append(latent_in.detach().clone())
 
             pbar.set_description(
-                (
-                    f"perceptual: {p_loss.item():.4f}; noise regularize: {n_loss.item():.4f};"
-                    f" mse: {mse_loss.item():.4f}; lr: {lr:.4f}"
+                ( # set noise reg to 0, and mse loss
+                    f"perceptual: {p_loss.item():.4f}; diff_loss: {diff_loss.item():.4f}; noise regularize: {0:.4f};"
+                    f" mse: {0:.4f}; total_loss: {loss.item():.4f};  lr: {lr:.4f}"
                 )
             )
+
         if args.reset_from == 0 and args.reset_till == 15:
             if args.invert_reset_till:
                 latent_shared_layers_diff.append(torch.sum(torch.pow(prev_latent-latent_in, 2) / 16).item())
@@ -305,8 +305,6 @@ if __name__ == "__main__":
         i, input_name = list(enumerate(args.files))[file_num]
         
         latent_description = ""
-        if args.full:
-            latent_description += "full-reset-latent"
         if args.reset_till:
             latent_description += "-reset-from-" + str(args.reset_from) + "-reset-till-" + str(args.reset_till) + "-layer"
             if args.invert_reset_till:
@@ -349,6 +347,7 @@ if __name__ == "__main__":
             latent_in.requires_grad = False
             
             # copy its values over
+            prev_latent = latent_in.detach().clone()
             if (args.invert_reset_till):
                 if (args.reset_till != 15):
                   latent_in.index_copy_(1, torch.tensor(list(range(args.reset_till,16)), device=device), new_latent_in[:,args.reset_till:,:])
@@ -357,19 +356,15 @@ if __name__ == "__main__":
                   latent_in.index_copy_(1, torch.tensor(list(range(0,args.reset_from)), device=device), new_latent_in[:,:args.reset_from,:])
 
             else:  
-                latent_in.index_copy_(1, torch.tensor(list(range(args.reset_from, args.reset_till)), device=device), new_latent_in[:,args.reset_from:args.reset_till,:])
+                latent_in.index_copy_(1, torch.tensor(list(range(args.reset_from, args.reset_till+1)), device=device), new_latent_in[:,args.reset_from:args.reset_till+1,:])
         
         # reset corresponding noise maps
         if (args.reset_till is not None):
             for noise in noises:
                 noise.requires_grad = False
 
-            if (args.full_reset_noise_map):
-                for i in range(len(noises)):
-                  noises[i] = original_initialized_noises[i].detach().clone()
-            else:
-                for i in range(args.reset_from, args.reset_till):
-                  noises[i] = original_initialized_noises[i].detach().clone()
+            for i in range(args.reset_from, args.reset_till+1):
+              noises[i] = original_initialized_noises[i].detach().clone()
         
     
     #print(latent_reset_layers_diff)
