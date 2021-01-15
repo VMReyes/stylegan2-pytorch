@@ -115,9 +115,6 @@ if __name__ == "__main__":
         "--optimize_noise_map", action="store_true", help="optimize the noise map"
     )
     parser.add_argument(
-        "--full_reset_noise_map", action="store_true", help="always completely reset the noise map"
-    )
-    parser.add_argument(
         "--heavy_start", action="store_true", help="begin the projection by projecting the first frame by 10000 iterations"
     )
 
@@ -212,6 +209,7 @@ if __name__ == "__main__":
         noise.requires_grad = args.optimize_noise_map # optimize for noise
 
     original_initialized_noises = [noise.detach().clone() for noise in noises]
+    #print("len of noises:", len(original_initialized_noises)) 15
     
     # set up perceptual loss net
     percept = lpips.PerceptualLoss(
@@ -226,6 +224,7 @@ if __name__ == "__main__":
     prev_latent = latent_in.detach().clone()
 
     for imgfile in args.files:
+        torch.manual_seed(0)
         print("latent_in:", latent_in)
         print("prev_latent:", prev_latent)
         
@@ -239,7 +238,7 @@ if __name__ == "__main__":
         imgs.append(img)
 
         imgs = torch.stack(imgs, 0).to(device)
-        optimizer = optim.Adam([latent_in] + noises, lr=args.lr)
+        optimizer = optim.Adam([latent_in], lr=args.lr) # change this?
 
         pbar = tqdm(range(100000 if file_num == 0 and args.heavy_start else args.step))
         latent_path = []
@@ -250,6 +249,7 @@ if __name__ == "__main__":
             optimizer.param_groups[0]["lr"] = lr
             noise_strength = latent_std * args.noise * max(0, 1 - t / args.noise_ramp) ** 2
             latent_n = latent_noise(latent_in, noise_strength.item())
+            assert latent_n.equal(latent_in)
 
             img_gen, _ = g_ema([latent_n], input_is_latent=True, noise=noises)
 
@@ -264,14 +264,14 @@ if __name__ == "__main__":
                 img_gen = img_gen.mean([3, 5])
 
             p_loss = percept(img_gen, imgs).sum()
-            diff_loss = args.diff_weight * (latent_in - prev_latent).norm(dim=2).mean()
+            diff_loss = args.diff_weight * ((latent_in - prev_latent)/latent_std).norm(dim=2).mean()
 
             loss = p_loss if file_num in [0,1] else p_loss + diff_loss
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            noise_normalize_(noises)
+            #noise_normalize_(noises)
 
             if (i + 1) % 100 == 0:
                 latent_path.append(latent_in.detach().clone())
@@ -316,8 +316,10 @@ if __name__ == "__main__":
         img_ar = make_image(img_gen)
 
         result_file = {}
+
         #i, input_name = list(enumerate(args.files))[file_num]
         #for i, input_name in enumerate(args.files):
+
         noise_single = []
         for noise in noises:
             noise_single.append(noise[i : i + 1])
@@ -357,13 +359,16 @@ if __name__ == "__main__":
 
             else:  
                 latent_in.index_copy_(1, torch.tensor(list(range(args.reset_from, args.reset_till+1)), device=device), new_latent_in[:,args.reset_from:args.reset_till+1,:])
+                assert latent_in.equal(original_initialized_latent)
         
         # reset corresponding noise maps
         if (args.reset_till is not None):
             for noise in noises:
                 noise.requires_grad = False
-
-            for i in range(args.reset_from, args.reset_till+1):
+            for i in range(args.reset_from, args.reset_till):
+              #print("noises[i]:", noises[i])
+              #print("original[i]:", original_initialized_noises[i])
+              assert noises[i].equal(original_initialized_noises[i].detach().clone()) # noise should not be changing
               noises[i] = original_initialized_noises[i].detach().clone()
         
     
