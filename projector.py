@@ -114,9 +114,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--optimize_noise_map", action="store_true", help="optimize the noise map"
     )
-    parser.add_argument(
-        "--heavy_start", action="store_true", help="begin the projection by projecting the first frame by 10000 iterations"
-    )
 
     parser.add_argument(
         "--lr_rampup",
@@ -157,6 +154,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "files", metavar="FILES", nargs="+", help="path to image files to be projected"
     )
+
+    # reproducibility
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
 
     args = parser.parse_args()
 
@@ -224,7 +225,6 @@ if __name__ == "__main__":
     prev_latent = latent_in.detach().clone()
 
     for imgfile in args.files:
-        torch.manual_seed(0)
         print("latent_in:", latent_in)
         print("prev_latent:", prev_latent)
         
@@ -240,7 +240,7 @@ if __name__ == "__main__":
         imgs = torch.stack(imgs, 0).to(device)
         optimizer = optim.Adam([latent_in], lr=args.lr) # change this?
 
-        pbar = tqdm(range(100000 if file_num == 0 and args.heavy_start else args.step))
+        pbar = tqdm(range(args.step))
         latent_path = []
 
         for i in pbar:
@@ -249,7 +249,6 @@ if __name__ == "__main__":
             optimizer.param_groups[0]["lr"] = lr
             noise_strength = latent_std * args.noise * max(0, 1 - t / args.noise_ramp) ** 2
             latent_n = latent_noise(latent_in, noise_strength.item())
-            assert latent_n.equal(latent_in)
 
             img_gen, _ = g_ema([latent_n], input_is_latent=True, noise=noises)
 
@@ -359,7 +358,6 @@ if __name__ == "__main__":
 
             else:  
                 latent_in.index_copy_(1, torch.tensor(list(range(args.reset_from, args.reset_till+1)), device=device), new_latent_in[:,args.reset_from:args.reset_till+1,:])
-                assert latent_in.equal(original_initialized_latent)
         
         # reset corresponding noise maps
         if (args.reset_till is not None):
@@ -368,7 +366,6 @@ if __name__ == "__main__":
             for i in range(args.reset_from, args.reset_till):
               #print("noises[i]:", noises[i])
               #print("original[i]:", original_initialized_noises[i])
-              assert noises[i].equal(original_initialized_noises[i].detach().clone()) # noise should not be changing
               noises[i] = original_initialized_noises[i].detach().clone()
         
     
