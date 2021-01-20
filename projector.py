@@ -225,8 +225,6 @@ if __name__ == "__main__":
     prev_latent = latent_in.detach().clone()
 
     for imgfile in args.files:
-        print("latent_in:", latent_in)
-        print("prev_latent:", prev_latent)
         
         latent_in.requires_grad = True # turn back backpropogation
         for noise in noises:
@@ -238,7 +236,7 @@ if __name__ == "__main__":
         imgs.append(img)
 
         imgs = torch.stack(imgs, 0).to(device)
-        optimizer = optim.Adam([latent_in], lr=args.lr) # change this?
+        optimizer = optim.Adam([latent_in], lr=args.lr)
 
         pbar = tqdm(range(args.step))
         latent_path = []
@@ -342,35 +340,30 @@ if __name__ == "__main__":
         file_num += 1
         
         # reset back to original latent
-        if (args.reset_till is not None):
+        if args.reset_till and args.reset_from:
 
             new_latent_in = original_initialized_latent
+
             latent_in.requires_grad = False
             
             # copy its values over
             prev_latent = latent_in.detach().clone()
             if (args.invert_reset_till):
                 if (args.reset_till != 15):
-                  latent_in.index_copy_(1, torch.tensor(list(range(args.reset_till,16)), device=device), new_latent_in[:,args.reset_till:,:])
+                  trimmed_original_initialized_latent = original_initialized_latent[:,args.reset_till:,:]
+                  relevant_indices = torch.tensor(list(range(args.reset_till,16)), device=device)
+                  latent_in.index_copy_(1, relevant_indices, trimmed_original_intialized_latent)
 
                 if (args.reset_from != 0):
-                  latent_in.index_copy_(1, torch.tensor(list(range(0,args.reset_from)), device=device), new_latent_in[:,:args.reset_from,:])
+                  trimmed_original_initialized_latent = original_initialized_latent[:,:args.reset_from:,:]
+                  relevant_indices = torch.tensor(list(range(0,args.reset_from)), device=device)
+                  latent_in.index_copy_(1, relevant_indices, trimmed_original_initialized_latent)
 
             else:  
-                latent_in.index_copy_(1, torch.tensor(list(range(args.reset_from, args.reset_till+1)), device=device), new_latent_in[:,args.reset_from:args.reset_till+1,:])
-        
-        # reset corresponding noise maps
-        if (args.reset_till is not None):
-            for noise in noises:
-                noise.requires_grad = False
-            for i in range(args.reset_from, args.reset_till):
-              #print("noises[i]:", noises[i])
-              #print("original[i]:", original_initialized_noises[i])
-              noises[i] = original_initialized_noises[i].detach().clone()
-        
-    
-    #print(latent_reset_layers_diff)
-    #print(latent_shared_layers_diff)
+                trimmed_original_initialized_latent = original_initialized_latent[:,args.reset_from:args.reset_till+1,:]
+                relevant_indices = torch.tensor(list(range(args.reset_from, args.reset_till+1)), device=device)
+                latent_in.index_copy_(1, relevant_indices, trimmed_original_initialized_latent)
+
     with open(args.out_dir + "lpip-diff" + latent_description + ".data", 'wb') as filehandle:
         pickle.dump({"reset_layers_diff":latent_reset_layers_diff, "shared_layers_diff":latent_shared_layers_diff, "lpip_diff":lpip_diff}, filehandle)
     plt.figure(figsize=(28,4))
