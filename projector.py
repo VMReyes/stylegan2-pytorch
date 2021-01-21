@@ -217,14 +217,13 @@ if __name__ == "__main__":
             model="net-lin", net="vgg", use_gpu=device.startswith("cuda")
         )
     
-    file_num = 0
     latent_reset_layers_diff = [] # tracks the l2 diff from latent[i] and latent[i-1] for layers we reset as we project frames
 
     latent_shared_layers_diff = [] # tracks the l2 diff from latent[i] and latent[i-1] for layers we preserve as we project frames
     lpip_diff = [] # tracks the lpip diff current image generated from latent and current original frame
     prev_latent = latent_in.detach().clone()
 
-    for imgfile in args.files:
+    for file_num, imgfile in enumerate(args.files):
         
         latent_in.requires_grad = True # turn back backpropogation
         for noise in noises:
@@ -313,9 +312,6 @@ if __name__ == "__main__":
         img_ar = make_image(img_gen)
 
         result_file = {}
-
-        #i, input_name = list(enumerate(args.files))[file_num]
-        #for i, input_name in enumerate(args.files):
 
         noise_single = []
         for noise in noises:
