@@ -1,6 +1,7 @@
 import argparse
 import math
 import os
+import numpy
 
 import torch
 torch.manual_seed(0)
@@ -278,21 +279,14 @@ if __name__ == "__main__":
                     f" mse: {0:.4f}; total_loss: {loss.item():.4f};  lr: {lr:.4f}"
                 )
             )
-
-        if args.reset_from == 0 and args.reset_till == 15:
-            if args.invert_reset_till:
-                latent_shared_layers_diff.append(torch.sum(torch.pow(prev_latent-latent_in, 2) / 16).item())
-                latent_reset_layers_diff.append(0)
-            else:
-                latent_reset_layers_diff.append(torch.sum(torch.pow(prev_latent-latent_in, 2) / 16).item())
+        
+        if args.reset_from is not None and args.reset_till is not None:
+            latent_diff = ((prev_latent-latent_in) / latent_std).norm(dim=2)[0]
+            if args.reset_from == 0 and args.reset_till == 15:
+                latent_reset_layers_diff.append(latent_diff)
                 latent_shared_layers_diff.append(0)
-        else:
-            if (args.invert_reset_till):
-                latent_shared_layers_diff.append(torch.sum(torch.pow(prev_latent[:,args.reset_from:args.reset_till,:]-latent_in[:,args.reset_from:args.reset_till,:], 2)).item() / (args.reset_till - args.reset_from + 1))
-                latent_reset_layers_diff.append(((torch.sum(torch.pow(prev_latent[:,args.reset_till:,:]-latent_in[:,args.reset_till:,:], 2)) + torch.sum(torch.pow(prev_latent[:,:args.reset_from,:]-latent_in[:,:args.reset_from,:], 2))).item()) / (16 - args.reset_till + args.reset_from))
             else:
-                latent_reset_layers_diff.append(torch.sum(torch.pow(prev_latent[:,args.reset_from:args.reset_till,:]-latent_in[:,args.reset_from:args.reset_till,:], 2)).item() / (args.reset_till - args.reset_from + 1))
-                latent_shared_layers_diff.append(((torch.sum(torch.pow(prev_latent[:,args.reset_till:,:]-latent_in[:,args.reset_till:,:], 2)) + torch.sum(torch.pow(prev_latent[:,:args.reset_from,:]-latent_in[:,:args.reset_from,:], 2))).item()) / (16 - args.reset_till + args.reset_from))
+                pass
         
         lpip_diff.append(p_loss.item())
 
@@ -336,7 +330,7 @@ if __name__ == "__main__":
         file_num += 1
         
         # reset back to original latent
-        if args.reset_till and args.reset_from:
+        if args.reset_till is not None and args.reset_from is not None:
 
             new_latent_in = original_initialized_latent
 
@@ -362,12 +356,31 @@ if __name__ == "__main__":
 
     with open(args.out_dir + "lpip-diff" + latent_description + ".data", 'wb') as filehandle:
         pickle.dump({"reset_layers_diff":latent_reset_layers_diff, "shared_layers_diff":latent_shared_layers_diff, "lpip_diff":lpip_diff}, filehandle)
-    plt.figure(figsize=(28,4))
-    plt.plot(latent_reset_layers_diff, color="orange", label="reset layers diff (avg layer squared distance)")
-    plt.plot(latent_shared_layers_diff, color="red", label="shared layers diff (avg layer squared distance)")
+    data = numpy.array([col.cpu().detach().numpy() for col in latent_reset_layers_diff])
+    fig, ax = plt.subplots()
+    c = ax.pcolor(data)
+    ax.set_title("reset layers diff")
+    fig.tight_layout()
+
+    #fig, ax = plt.subplots()
+    #print("before img", latent_reset_layers_diff)
+    #data = numpy.array([col.cpu().detach().numpy() for col in latent_reset_layers_diff]))
+
+    #plt.figure(figsize=(28,4))
+    #ax.set_xticks(range(len(latent_reset_layers_diff)))
+    #ax.set_yticks(range(len(latent_reset_layers_diff[0])))
+    #for i in range(len(latent_reset_layers_diff)):
+    #    for j in range(len(latent_reset_layers_diff[i])):
+    #        print("latent_reset_layers_diff[i][j]", latent_reset_layers_diff[i][j])
+    #        text = ax.text(j, i, latent_reset_layers_diff[i][j].item(), ha="center", va="center", color="w")
+
+    #plt.plot(latent_reset_layers_diff, color="orange", label="reset layers diff (avg layer squared distance)")
+
+    #plt.plot(latent_shared_layers_diff, color="red", label="shared layers diff (avg layer squared distance)")
     
-    plt.twinx()
-    plt.plot(lpip_diff, color="blue", label="lpip distance")
-    plt.legend(loc="best")
+    #plt.subplot(2,1,2)
+    #plt.plot(lpip_diff, color="blue", label="lpip distance")
+    #plt.legend(loc="best")
+    #fig.tight_layout()
     plt.savefig(args.out_dir + "lpip-diff-graph" + latent_description + ".png")
 
