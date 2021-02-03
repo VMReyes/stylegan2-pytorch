@@ -282,11 +282,7 @@ if __name__ == "__main__":
         
         if args.reset_from is not None and args.reset_till is not None:
             latent_diff = ((prev_latent-latent_in) / latent_std).norm(dim=2)[0]
-            if args.reset_from == 0 and args.reset_till == 15:
-                latent_reset_layers_diff.append(latent_diff)
-                latent_shared_layers_diff.append(0)
-            else:
-                pass
+            latent_reset_layers_diff.append(latent_diff)
         
         lpip_diff.append(p_loss.item())
 
@@ -357,10 +353,14 @@ if __name__ == "__main__":
     with open(args.out_dir + "lpip-diff" + latent_description + ".data", 'wb') as filehandle:
         pickle.dump({"reset_layers_diff":latent_reset_layers_diff, "shared_layers_diff":latent_shared_layers_diff, "lpip_diff":lpip_diff}, filehandle)
     data = numpy.array([col.cpu().detach().numpy() for col in latent_reset_layers_diff])
+    data[0] = 0 * data[0]
+    data[1] = 0 * data[1]
     fig, ax = plt.subplots()
     c = ax.pcolor(data)
-    ax.set_title("reset layers diff")
+    ax.set_yticks(range(0,len(data)))
+    ax.set_title("delta magnitude across projected latents")
     fig.tight_layout()
+    fig.colorbar(c, ax=ax)
 
     #fig, ax = plt.subplots()
     #print("before img", latent_reset_layers_diff)
