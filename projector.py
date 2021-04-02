@@ -99,9 +99,6 @@ if __name__ == "__main__":
         "--size", type=int, default=256, help="output image sizes of the generator"
     )
     parser.add_argument(
-       "--split_lpips", action="store_true", help="compute lpips by upscaling generated image and running lpips on left half + right half"
-    )
-    parser.add_argument(
         "--channel_multiplier", type=int, default=2, help="model checkpoint channel multiplier"
     )
     parser.add_argument(
@@ -172,19 +169,15 @@ if __name__ == "__main__":
     n_mean_latent = 10000
 
     resize = min(args.size, SOURCE_DIM)
-    
     # define a resolution that is 2 : 1 to crop to that fits within the scene's frames dimensions
     #crop_width = 1280
     #crop_height = 640
 
     # assume input is h:w 1:2
     transformations = []
-    if args.split_lpips:
-        transformations.append(transforms.Resize((resize, resize*2)))
-    else:
-        transformations.append(transforms.Resize((resize, resize)))
-
+    transformations.append(transforms.Resize((resize, resize)))
     transformations.append(transforms.ToTensor())
+
     if not args.normalize_frame:
         transformations.append(transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]))
 
@@ -195,7 +188,8 @@ if __name__ == "__main__":
     g_ema.load_state_dict(torch.load(args.ckpt)["g_ema"], strict=False)
     g_ema.eval()
     g_ema = g_ema.to(device)
-    # create a random latent that will persist
+
+    # create a random latent that will be the latent used to begin optimization of every frame
     with torch.no_grad():
         noise_sample = torch.randn(n_mean_latent, 512, device=device)
         latent_out = g_ema.style(noise_sample)
@@ -221,7 +215,6 @@ if __name__ == "__main__":
         noise.requires_grad = args.optimize_noise_map # optimize for noise
 
     original_initialized_noises = [noise.detach().clone() for noise in noises]
-    #print("len of noises:", len(original_initialized_noises)) 15
     
     # set up perceptual loss net
     percept = lpips.PerceptualLoss(
@@ -238,9 +231,9 @@ if __name__ == "__main__":
         
         latent_in.requires_grad = True # turn back backpropogation
         for noise in noises:
-            noise.requires_grad = args.optimize_noise_map # turn it back on for noise too
+            noise.requires_grad = args.optimize_noise_map # turn it back on for noise too, if we are optimizing noise maps
             
-        imgs = []
+        target_frame = []
 
         rgb_img = Image.open(imgfile).convert("RGB")
         rgb_tensor = transforms.functional.to_tensor(rgb_img)
@@ -263,9 +256,10 @@ if __name__ == "__main__":
                 img[j] = torch.clamp((img[j] - channel_means[j]), -1, 1)
                 print("mean, min, max, stdev after normalization", img[j,:,:].mean(), img[j].min(), img[j].max(), img[j,:,:].std())
                 print(img[j])
-        imgs.append(img)
 
-        imgs = torch.stack(imgs, 0).to(device)
+        target_frame.append(img)
+
+        target_frame = torch.stack(target_frame, 0).to(device)
         optimizer = optim.Adam([latent_in], lr=args.lr)
 
         pbar = tqdm(range(args.step))
@@ -281,30 +275,8 @@ if __name__ == "__main__":
             img_gen, _ = g_ema([latent_n], input_is_latent=True, noise=noises)
 
             batch, channel, height, width = img_gen.shape
-            #print("img_gen.shape:",img_gen.shape)
-            #print("imgs[0].shape:",imgs[0].shape)
-            #if args.normalize_frame:
-            #    for j in range(3):
-            #        img_gen[0][j] = (img_gen[0][j] * channel_stddev[j]) + channel_means[j]
-            if args.split_lpips:
-                 # upscale generated image, to 1:2 ratio
-                 
-                 #height_factor = SOURCE_DIM / height
-                       
-                 img_gen = torch.nn.functional.interpolate(img_gen, img[0].shape)
-                 #print("it worked")
 
-                 #print("img_gen shape", img_gen.shape)
-                 #print("img shape", img.shape)
-
-                 # left lpips
-                 #print("indexed img gen shape", img_gen[:,:,:,:source_img_height].shape)
-                 #print("indexed imgs shape", imgs[:,:,:,:source_img_height].shape)
-                 left_lpips = percept(img_gen[:,:,:,:source_img_height], imgs[:,:,:,:source_img_height])
-                 right_lpips = percept(img_gen[:,:,:,source_img_height:], imgs[:,:,:,source_img_height:])
-                 p_loss = left_lpips + right_lpips
-            else:
-                 p_loss = percept(img_gen, imgs).sum()
+            p_loss = percept(img_gen, target_frame).sum()
 
             diff_loss = args.diff_weight * ((latent_in - prev_latent)/latent_std).norm(dim=2).mean()
 
