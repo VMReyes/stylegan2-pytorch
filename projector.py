@@ -242,7 +242,11 @@ if __name__ == "__main__":
             
         imgs = []
 
-        img = transform(Image.open(imgfile).convert("RGB"))
+        rgb_img = Image.open(imgfile).convert("RGB")
+        rgb_tensor = transforms.functional.to_tensor(rgb_img)
+
+        img = transform(rgb_img)
+
         source_img_height = img[0].shape[0]
         source_img_width = img[0].shape[1]
         
@@ -254,7 +258,11 @@ if __name__ == "__main__":
 
         if args.normalize_frame: #TODO try with just the mean, and clip to -1 and 1
             for j in range(3):
-                img[j] = torch.clamp(img[j] - channel_means[j], -1, 1)
+                print("mean, min, max, stdev", channel_means[j], img[j].min(), img[j].max(), channel_stddev[j])
+                print(img[j])
+                img[j] = torch.clamp((img[j] - channel_means[j]), -1, 1)
+                print("mean, min, max, stdev after normalization", img[j,:,:].mean(), img[j].min(), img[j].max(), img[j,:,:].std())
+                print(img[j])
         imgs.append(img)
 
         imgs = torch.stack(imgs, 0).to(device)
@@ -278,7 +286,6 @@ if __name__ == "__main__":
             #if args.normalize_frame:
             #    for j in range(3):
             #        img_gen[0][j] = (img_gen[0][j] * channel_stddev[j]) + channel_means[j]
-
             if args.split_lpips:
                  # upscale generated image, to 1:2 ratio
                  
@@ -326,9 +333,12 @@ if __name__ == "__main__":
 
         img_gen, _ = g_ema([latent_path[-1]], input_is_latent=True, noise=noises)
 
+        print('img_gen shape before normalize:', img_gen.shape)
         if args.normalize_frame:
             for j in range(3):
+                #print("img_gen[0][j] + mean:", img_gen[0][j] + channel_means[j])
                 img_gen[0][j] = img_gen[0][j] + channel_means[j]
+                #print("img_gen[0][j]:", img_gen[0][j])
 
         i, input_name = list(enumerate(args.files))[file_num]
         
@@ -342,6 +352,7 @@ if __name__ == "__main__":
         filename = args.out_dir + os.path.splitext(os.path.basename(input_name))[0] + latent_description + ".pt"
 
         img_ar = make_image(img_gen)
+        print('img_ar shape:', img_ar.shape)
 
         result_file = {}
 
@@ -356,6 +367,7 @@ if __name__ == "__main__":
         }
         img_name = args.out_dir + os.path.splitext(os.path.basename(input_name))[0] + latent_description + "-project.png"
         final_img_ar = img_ar[0]
+        print('final_img_ar', final_img_ar)
         final_img = Image.fromarray(final_img_ar).resize((args.input_width,args.input_height))
         
         comparison_img = Image.new('RGB', (2 * args.input_width, args.input_height))
