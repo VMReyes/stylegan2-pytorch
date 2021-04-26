@@ -1,3 +1,4 @@
+import pdb
 import argparse
 import math
 import os
@@ -177,10 +178,7 @@ if __name__ == "__main__":
     transformations = []
     transformations.append(transforms.Resize((resize, resize)))
     transformations.append(transforms.ToTensor())
-
-    if not args.normalize_frame:
-        transformations.append(transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]))
-
+    transformations.append(transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]))
     transform = transforms.Compose(transformations)
 
     # set up generator
@@ -221,8 +219,9 @@ if __name__ == "__main__":
             model="net-lin", net="vgg", use_gpu=device.startswith("cuda")
         )
     
+    if args.normalize_frame:
+        lpip_diff_to_original = [] # when normalizing, fit to the normalized image but show an lpips graph with respect to the original frame
     latent_reset_layers_diff = [] # tracks the l2 diff from latent[i] and latent[i-1] for layers we reset as we project frames
-
     latent_shared_layers_diff = [] # tracks the l2 diff from latent[i] and latent[i-1] for layers we preserve as we project frames
     lpip_diff = [] # tracks the lpip diff current image generated from latent and current original frame
     prev_latent = latent_in.detach().clone()
@@ -243,19 +242,12 @@ if __name__ == "__main__":
         source_img_height = img[0].shape[0]
         source_img_width = img[0].shape[1]
         
-        #print(img[0,:,:].shape)
         channel_means = [img[i,:,:].mean() for i in range(0,3)]
-        #print("channel_means:", channel_means)
         channel_stddev = [img[i,:,:].std() for i in range(0,3)]
-        #print("channel_stddev:", channel_stddev)
 
         if args.normalize_frame: #TODO try with just the mean, and clip to -1 and 1
             for j in range(3):
-                print("mean, min, max, stdev", channel_means[j], img[j].min(), img[j].max(), channel_stddev[j])
-                print(img[j])
                 img[j] = torch.clamp((img[j] - channel_means[j]), -1, 1)
-                print("mean, min, max, stdev after normalization", img[j,:,:].mean(), img[j].min(), img[j].max(), img[j,:,:].std())
-                print(img[j])
 
         target_frame.append(img)
 
@@ -300,17 +292,19 @@ if __name__ == "__main__":
         if args.reset_from is not None and args.reset_till is not None:
             latent_diff = ((prev_latent-latent_in) / latent_std).norm(dim=2)[0]
             latent_reset_layers_diff.append(latent_diff)
-        
+
+        if args.normalize_frame:
+            for j in range(3):
+                img_gen[0][j] = torch.clamp((img_gen[0][j] + channel_means[j]), -1, 1)
+            lpip_diff_to_original.append(percept(img_gen,img).item())
+
         lpip_diff.append(p_loss.item())
 
         img_gen, _ = g_ema([latent_path[-1]], input_is_latent=True, noise=noises)
 
-        print('img_gen shape before normalize:', img_gen.shape)
         if args.normalize_frame:
             for j in range(3):
-                #print("img_gen[0][j] + mean:", img_gen[0][j] + channel_means[j])
                 img_gen[0][j] = img_gen[0][j] + channel_means[j]
-                #print("img_gen[0][j]:", img_gen[0][j])
 
         i, input_name = list(enumerate(args.files))[file_num]
         
@@ -324,7 +318,6 @@ if __name__ == "__main__":
         filename = args.out_dir + os.path.splitext(os.path.basename(input_name))[0] + latent_description + ".pt"
 
         img_ar = make_image(img_gen)
-        print('img_ar shape:', img_ar.shape)
 
         result_file = {}
 
@@ -339,7 +332,6 @@ if __name__ == "__main__":
         }
         img_name = args.out_dir + os.path.splitext(os.path.basename(input_name))[0] + latent_description + "-project.png"
         final_img_ar = img_ar[0]
-        print('final_img_ar', final_img_ar)
         final_img = Image.fromarray(final_img_ar).resize((args.input_width,args.input_height))
         
         comparison_img = Image.new('RGB', (2 * args.input_width, args.input_height))
@@ -377,7 +369,11 @@ if __name__ == "__main__":
                 latent_in.index_copy_(1, relevant_indices, trimmed_original_initialized_latent)
 
     with open(args.out_dir + "lpip-diff" + latent_description + ".data", 'wb') as filehandle:
-        pickle.dump({"reset_layers_diff":latent_reset_layers_diff, "shared_layers_diff":latent_shared_layers_diff, "lpip_diff":lpip_diff}, filehandle)
+        if args.normalize_frame:
+            relevant_lpip = lpip_diff_to_original
+        else:
+            relevant_lpip = lpip_diff
+        pickle.dump({"reset_layers_diff":latent_reset_layers_diff, "shared_layers_diff":latent_shared_layers_diff, "lpip_diff":relevant_lpip}, filehandle)
     data = numpy.array([col.cpu().detach().numpy() for col in latent_reset_layers_diff])
     data[0] = 0 * data[0]
     data[1] = 0 * data[1]
@@ -388,25 +384,5 @@ if __name__ == "__main__":
     fig.tight_layout()
     fig.colorbar(c, ax=ax)
 
-    #fig, ax = plt.subplots()
-    #print("before img", latent_reset_layers_diff)
-    #data = numpy.array([col.cpu().detach().numpy() for col in latent_reset_layers_diff]))
-
-    #plt.figure(figsize=(28,4))
-    #ax.set_xticks(range(len(latent_reset_layers_diff)))
-    #ax.set_yticks(range(len(latent_reset_layers_diff[0])))
-    #for i in range(len(latent_reset_layers_diff)):
-    #    for j in range(len(latent_reset_layers_diff[i])):
-    #        print("latent_reset_layers_diff[i][j]", latent_reset_layers_diff[i][j])
-    #        text = ax.text(j, i, latent_reset_layers_diff[i][j].item(), ha="center", va="center", color="w")
-
-    #plt.plot(latent_reset_layers_diff, color="orange", label="reset layers diff (avg layer squared distance)")
-
-    #plt.plot(latent_shared_layers_diff, color="red", label="shared layers diff (avg layer squared distance)")
-    
-    #plt.subplot(2,1,2)
-    #plt.plot(lpip_diff, color="blue", label="lpip distance")
-    #plt.legend(loc="best")
-    #fig.tight_layout()
     plt.savefig(args.out_dir + "lpip-diff-graph" + latent_description + ".png")
 
