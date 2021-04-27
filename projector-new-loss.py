@@ -276,11 +276,13 @@ if __name__ == "__main__":
         #interpolated_latents = []
         minibatch = 5
         optimizer.zero_grad()
+        #print("args.look_ahead // minibatch:", args.look_ahead // minibatch)
         for j in range(args.look_ahead // minibatch): 
             imgs_gen = []
             
             for k in range(minibatch):
-                interpolated_latent = latent_n +  (k + j*minibatch)/(args.look_ahead-1) * delta_latent
+                weight = (k + j*minibatch)/(args.look_ahead-1) 
+                interpolated_latent = latent_n +  weight * delta_latent
                 #interpolated_latents.append(interpolated_latent)
                 img_gen, _ = g_ema([interpolated_latent], input_is_latent=True, noise=noises) # make the images
                 imgs_gen.append(img_gen[0])
@@ -290,7 +292,7 @@ if __name__ == "__main__":
             for k in range(len(imgs_gen)):
                 #print("imgs_gen[j] shape:", imgs_gen[j].shape)
                 #print("frames[j] shape:", frames[j].shape)
-                frame_loss = percept(imgs_gen[k], frames[k])
+                frame_loss = percept(imgs_gen[k], frames[k + j*minibatch])
                 #pdb.set_trace()
                 p_loss += frame_loss 
                 #pdb.set_trace() # check if frame_loss can just be appended nicely
@@ -366,7 +368,7 @@ if __name__ == "__main__":
         interpolated_latent = latent_n + j/(args.look_ahead-1) * delta_latent
         #interpolated_latents.append(interpolated_latent)
         img_gen, _ = g_ema([interpolated_latent], input_is_latent=True, noise=noises) # make the images
-        img_name = args.out_dir + os.path.splitext(os.path.basename(input_name))[0] + latent_description + "-" + str(j) +  "-project.png"
+        img_name = args.out_dir + os.path.splitext(os.path.basename(input_name))[0] + latent_description + "-" + f"{j:02d}" +  "-project.png"
         final_img_ar = make_image(img_gen)[0]
         final_img = Image.fromarray(final_img_ar).resize((args.input_width,args.input_height))
     
