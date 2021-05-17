@@ -204,14 +204,11 @@ if __name__ == "__main__":
         noises.append(noise.repeat(1, 1, 1, 1).normal_())
 
     latent_in = latent_mean.detach().clone().unsqueeze(0).repeat(1, 1)
-    latent_in2 = latent_mean.detach().clone().unsqueeze(0).repeat(1, 1)
 
     if args.w_plus:
         latent_in = latent_in.unsqueeze(1).repeat(1, g_ema.n_latent, 1)
-        latent_in2 = latent_in2.unsqueeze(1).repeat(1, g_ema.n_latent, 1)
 
     latent_in.requires_grad = True
-    latent_in2.requires_grad = True
     
     original_initialized_latent = latent_in.detach().clone()
 
@@ -253,88 +250,93 @@ if __name__ == "__main__":
         frames.append(img)
     frames = torch.stack(frames)
 
-    
-    optimizer = optim.Adam([latent_in, latent_in2], lr=args.lr)
-
     pbar = tqdm(range(args.step))
     latent_path = []
 
     p_losses = []
 
     # get z1
-    for i in pbar:
-        t = i / args.step
-        lr = get_lr(t, args.lr)
-        optimizer.param_groups[0]["lr"] = lr
-        noise_strength = latent_std * args.noise * max(0, 1 - t / args.noise_ramp) ** 2
-        latent_n = latent_noise(latent_in, noise_strength.item())
-        latent_n2 = latent_noise(latent_in2, noise_strength.item())
+    target_frames = []
+    new_split = [0,29]
 
-        delta_latent = latent_n2 - latent_n
-        # interpolate to create intermediate frames
-        iteration_losses = []
-        #interpolated_latents = []
-        minibatch = 5
-        optimizer.zero_grad()
-        #print("args.look_ahead // minibatch:", args.look_ahead // minibatch)
-        for j in range(args.look_ahead // minibatch): 
-            imgs_gen = []
-           
-            for k in range(minibatch):
-                frame_index = k + j*minibatch
-                weight = (frame_index)/(args.look_ahead-1) 
-                interpolated_latent = latent_n +  weight * delta_latent
+    while len(target_frames) < 8:
+        # create optimizer
+        # make a list of points
+        target_frames.extend(new_split)
+        target_frames.sort()
+
+        latents = []
+        for _ in target_frames:
+            cloned_latent = original_initialized_latent.detach().clone()
+            cloned_latent.requires_grad = True
+            latents.append(cloned_latent)
+        optimizer = optim.Adam(latents, lr=args.lr)
+
+        
+        #for every two indices, interpolate between them
+            
+
+        for i in pbar:
+            t = i / args.step
+            lr = get_lr(t, args.lr)
+            optimizer.param_groups[0]["lr"] = lr
+            noise_strength = latent_std * args.noise * max(0, 1 - t / args.noise_ramp) ** 2
+            latents_n = []
+
+            for latent in latents:
+                latents_n.append(latent_noise(latent, noise_strength.item()))
+
+            for j in range(0, len(target_frames), 2):
+                latent_1_index = target_frames[j]
+                latent_2_index = target_frames[j+1]
+                print(f"latent_1_index:{latent_1_index}, latent_2_index:{latent_2_index}")
+
+                latent_1 = latents_n[j]
+                latent_2 = latents_n[j+1]
+                delta = latent_2 - latent_1
                 
-                img_gen, _ = g_ema([interpolated_latent], input_is_latent=True, noise=noises) # make the images
-                imgs_gen.append(img_gen[0])
+                num_frames = latent_2_index - latent_1_index
                 
-            imgs_gen = torch.stack(imgs_gen)#.to(device)
-            p_loss = 0
-            for k in range(len(imgs_gen)):
-                #print("imgs_gen[j] shape:", imgs_gen[j].shape)
-                #print("frames[j] shape:", frames[j].shape)
-                frame_loss = percept(imgs_gen[k], frames[k + j*minibatch])
-                #pdb.set_trace()
-                p_loss += frame_loss 
-                #pdb.set_trace() # check if frame_loss can just be appended nicely
-                iteration_losses.append(frame_loss.item())
-            loss = p_loss
-            loss.backward()
-            # write out images
+                iteration_losses = []
+                minibatch = 5
+                optimizer.zero_grad()
+                indices = list(range(latent_1_index, latent_2_index+1))
+                print(f"indices:{indices}")
+                num_batches = num_frames // minibatch + int(num_frames % minibatch > 0) # use index splicing to make it easier
+                for k in range(num_batches):
+                    imgs_gen = []
+                    for index in indices[k*minibatch:k*minibatch+minibatch]:
+                        interpolated_point = (index- latent_1_index) / (num_frames)
+                        print(f"k: {k}, interpolated_point: {interpolated_point}")
+                        interpolated_latent = interpolated_point * delta + latent_1
+                        img_gen, _ = g_ema([interpolated_latent], input_is_latent=True, noise=noises) # make the images
+                        imgs_gen.append(img_gen[0])
+                    imgs_gen = torch.stack(imgs_gen).to(device)
+                    p_loss = 0
+                    for img_num in range(len(imgs_gen)):
+                        frame_loss = percept(img, frames[img_num + j*minibatch])
+                        p_loss += frame_loss
+                        iteration_losses.append(frame_loss.item())
+                    loss = p_loss
+                    loss.backward()
+                optimizer.step()
 
-        optimizer.step()
-        #frames = torch.stack(frames).to(device)
-        #print("imgs_gen.shape:", imgs_gen.shape)
-            #img_gen, _ = g_ema([interpolated_latent], input_is_latent=True, noise=noises
-            #perceptual_loss = percept(
-            #p_loss += 
-        #assert latents[-1].equals(latent_n2)
-        #batch, channel, height, width = img_gen.shape
+            if (i + 1) % 100 == 0:
+                print(f"Saving latent and logging p_loss at i:{i}")
+                latent_path.append(latents)
+                p_losses.append(iteration_losses)
 
-        #for j in range(args.look_ahead):
-        #    p_loss += percept(imgs_gen[j], frames[j]).sum()
-
-        # assuming its going frame by frame...
-        #p_loss = percept(imgs_gen, frames).sum()
-        #pdb.set_trace()
-        #gradient grows at 600mb per loss
-        #torch.cuda.empty_cache()
-
-        #loss = p_loss #if file_num in [0,1] else p_loss + diff_loss
-        #optimizer.zero_grad()
-        #loss.backward()
-        #optimizer.step()
-
-        if (i + 1) % 100 == 0:
-            latent_path.append([latent_in.detach().clone(), latent_in2.detach().clone()])
-            p_losses.append(iteration_losses)
-
-        pbar.set_description(
-            ( # set noise reg to 0, and mse loss
-                f"perceptual: {p_loss.item():.4f}; diff_loss: {0:.4f}; noise regularize: {0:.4f};"
-                f" mse: {0:.4f}; total_loss: {loss.item():.4f};  lr: {lr:.4f}"
+            pbar.set_description(
+                ( # set noise reg to 0, and mse loss
+                    f"perceptual: {p_loss.item():.4f}; diff_loss: {0:.4f}; noise regularize: {0:.4f};"
+                    f" mse: {0:.4f}; total_loss: {loss.item():.4f};  lr: {lr:.4f}"
+                )
             )
-        )
+        peak = torch.argmax(iteration_losses)
+        new_split = [peak-1, peak]
+        if peak-1 in target_frames or peak in target_frames:
+            raise RuntimeError("Peak finding returned index already optimized. Stopping.")
+            break
 
     # save latent_n ... and frames
 
