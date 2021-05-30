@@ -106,6 +106,9 @@ if __name__ == "__main__":
         "--invert_reset_till", action="store_true", help="invert the selection by reset_till"
     )
     parser.add_argument(
+        "--num_segments", type=int, required=True, help="maximum number of segments. the first and last frame of each segment is explicitly optimized."
+    )
+    parser.add_argument(
         "--reset_from", type=int, help="reset starting at layer value  0 indexed"
     )
     parser.add_argument(
@@ -253,17 +256,17 @@ if __name__ == "__main__":
     pbar = tqdm(range(args.step))
     latent_path = []
 
-    p_losses = []
 
     # get z1
     target_frames = []
-    new_split = [0,29]
+    new_split = [0, args.look_ahead]
 
-    while len(target_frames) < 8:
+    while len(target_frames) < 2*args.num_segments:
         # create optimizer
         # make a list of points
         target_frames.extend(new_split)
         target_frames.sort()
+        print(f"target_frames:{target_frames}")
 
         latents = []
         for _ in target_frames:
@@ -271,17 +274,16 @@ if __name__ == "__main__":
             cloned_latent.requires_grad = True
             latents.append(cloned_latent)
         optimizer = optim.Adam(latents, lr=args.lr)
+        p_losses = []
 
-        
         #for every two indices, interpolate between them
-            
-
         for i in pbar:
             t = i / args.step
             lr = get_lr(t, args.lr)
             optimizer.param_groups[0]["lr"] = lr
             noise_strength = latent_std * args.noise * max(0, 1 - t / args.noise_ramp) ** 2
             latents_n = []
+            iteration_losses = []
 
             for latent in latents:
                 latents_n.append(latent_noise(latent, noise_strength.item()))
@@ -289,7 +291,7 @@ if __name__ == "__main__":
             for j in range(0, len(target_frames), 2):
                 latent_1_index = target_frames[j]
                 latent_2_index = target_frames[j+1]
-                print(f"latent_1_index:{latent_1_index}, latent_2_index:{latent_2_index}")
+                #print(f"latent_1_index:{latent_1_index}, latent_2_index:{latent_2_index}")
 
                 latent_1 = latents_n[j]
                 latent_2 = latents_n[j+1]
@@ -297,24 +299,23 @@ if __name__ == "__main__":
                 
                 num_frames = latent_2_index - latent_1_index
                 
-                iteration_losses = []
                 minibatch = 5
                 optimizer.zero_grad()
                 indices = list(range(latent_1_index, latent_2_index+1))
-                print(f"indices:{indices}")
+                #print(f"indices:{indices}")
                 num_batches = num_frames // minibatch + int(num_frames % minibatch > 0) # use index splicing to make it easier
                 for k in range(num_batches):
                     imgs_gen = []
                     for index in indices[k*minibatch:k*minibatch+minibatch]:
                         interpolated_point = (index- latent_1_index) / (num_frames)
-                        print(f"k: {k}, interpolated_point: {interpolated_point}")
+                        #print(f"k: {k}, interpolated_point: {interpolated_point}")
                         interpolated_latent = interpolated_point * delta + latent_1
                         img_gen, _ = g_ema([interpolated_latent], input_is_latent=True, noise=noises) # make the images
                         imgs_gen.append(img_gen[0])
                     imgs_gen = torch.stack(imgs_gen).to(device)
                     p_loss = 0
                     for img_num in range(len(imgs_gen)):
-                        frame_loss = percept(img, frames[img_num + j*minibatch])
+                        frame_loss = percept(imgs_gen[img_num], frames[img_num + k*minibatch + latent_1_index])
                         p_loss += frame_loss
                         iteration_losses.append(frame_loss.item())
                     loss = p_loss
@@ -332,54 +333,59 @@ if __name__ == "__main__":
                     f" mse: {0:.4f}; total_loss: {loss.item():.4f};  lr: {lr:.4f}"
                 )
             )
-        peak = torch.argmax(iteration_losses)
+        peak = torch.argmax(torch.as_tensor(iteration_losses)).item()
         new_split = [peak-1, peak]
-        if peak-1 in target_frames or peak in target_frames:
-            raise RuntimeError("Peak finding returned index already optimized. Stopping.")
+        if (peak-1 in target_frames) or (peak in target_frames):
+            print("Peak finding returned index already optimized. Stopping.")
             break
 
-    # save latent_n ... and frames
-
+    # save latents and frames
+    # construct the filename
     i, input_name = list(enumerate(args.files))[0]
-    
     latent_description = "-" + str(args.step) + "-steps"
-            
     filename = args.out_dir + os.path.splitext(os.path.basename(input_name))[0] + latent_description + ".pt"
-    imgs_ar = []
-    #pdb.set_trace()
-    for img in imgs_gen:
-        imgs_ar.append(make_image(img.unsqueeze(0)))
-    #img_ar = make_image(img_gen)
-    #pdb.set_trace()
-
+    # store a noise latent
     result_file = {}
-
     noise_single = []
     for noise in noises:
         noise_single.append(noise[i : i + 1])
+    # create and save frames
+    frame_num = 0
+    final_frames = []
+    for j in range(0, len(target_frames), 2):
+        latent_1_index = target_frames[j]
+        latent_2_index = target_frames[j+1]
+        print(f"(generating_final_frames) latent_1_index:{latent_1_index}, latent_2_index:{latent_2_index}")
 
+        latent_1 = latents_n[j]
+        latent_2 = latents_n[j+1]
+        delta = latent_2 - latent_1
+        
+        num_frames = latent_2_index - latent_1_index
+        indices = list(range(latent_1_index, latent_2_index+1))
+        for k in range(num_frames):
+            interpolated_point = (k) / (num_frames)
+            interpolated_latent = interpolated_point * delta + latent_1
+            img_gen, _ = g_ema([interpolated_latent], input_is_latent=True, noise=noises) # make the images
+            final_img_ar = make_image(img_gen)[0]
+            final_img = Image.fromarray(final_img_ar).resize((args.input_width,args.input_height))
+            comparison_img = Image.new('RGB', (2 * args.input_width, args.input_height))
+            comparison_img.paste(final_img, (0,0))
+            comparison_img.paste(Image.open(list(enumerate(args.files))[frame_num][1]).convert("RGB"), (args.input_width,0))
+
+            img_name = args.out_dir + os.path.splitext(os.path.basename(input_name))[0] + latent_description + "-" + f"{frame_num:02d}" +  "-project.png"
+            comparison_img.save(img_name)
+
+            final_frames.append(comparison_img)
+            frame_num += 1
+    # create and save data
     result_file[input_name] = {
-        "img": img_gen[0],
-        "latent1": latent_in[0],
-        "latent2": latent_in2[0],
-        "noise": noise_single, # TODO(vmreyes): This isn't saving properly, it saves a 0,1,X,X tensor
+        "final_frames": final_frames,
+        "latents": latents,
+        "target_frames": target_frames
     }
     torch.save(result_file, filename)
     
-    # print images out
-    for j in range(args.look_ahead):
-        interpolated_latent = latent_n + j/(args.look_ahead-1) * delta_latent
-        #interpolated_latents.append(interpolated_latent)
-        img_gen, _ = g_ema([interpolated_latent], input_is_latent=True, noise=noises) # make the images
-        img_name = args.out_dir + os.path.splitext(os.path.basename(input_name))[0] + latent_description + "-" + f"{j:02d}" +  "-project.png"
-        final_img_ar = make_image(img_gen)[0]
-        final_img = Image.fromarray(final_img_ar).resize((args.input_width,args.input_height))
-    
-        comparison_img = Image.new('RGB', (2 * args.input_width, args.input_height))
-        comparison_img.paste(final_img, (0,0))
-        #pdb.set_trace()
-        comparison_img.paste(Image.open(list(enumerate(args.files))[j][1]).convert("RGB"), (args.input_width,0))
-        comparison_img.save(img_name)
 
     # save the history of lpips
     with open(args.out_dir + "lpips" + latent_description + ".data", 'wb') as filehandle:
